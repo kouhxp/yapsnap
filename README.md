@@ -18,6 +18,7 @@ That's it. You get a `.txt` next to your shell, transcribed on your CPU, in less
 - 🌐 **Any video URL, plus local files.** YouTube. X. TikTok. Instagram Reels. Direct `.mp4`/`.mp3` links. Or just point it at a file on disk. yt-dlp handles the fetch, ffmpeg handles the decode, the rest is yours.
 - 📴 **Offline after first run.** ~80 MB model downloads once to your cache and stays there. No API keys. No quotas. Your audio never leaves your machine.
 - 🪶 **One file, three deps.** `sherpa-onnx`, `numpy`, `yt-dlp`. The whole tool is a single Python module.
+- 🗣 **Ten-plus languages.** English out of the box; French, German, Spanish, Italian, Portuguese, Dutch, Swedish, Swiss German, Hebrew, and Turkish are a one-line `--model` swap away. See [Other languages](#other-languages).
 - ⏱ **Sentence-level timestamps when you want them.** `--timestamps` adds `[MM:SS]` per sentence using Kroko's built-in punctuation. Timing stays correct even when you transcribe at 2x.
 
 ---
@@ -157,9 +158,41 @@ To use a different streaming transducer (other languages, larger Kroko variants,
 
 ---
 
+## Other languages
+
+The default model is English, but yapsnap isn't limited to it. To transcribe another language, just download the matching model and point yapsnap at it — no code changes, no reinstall.
+
+Kroko publishes streaming models for a growing list of languages on Hugging Face: <https://huggingface.co/Banafo/Kroko-ASR/tree/main>. As of now that includes:
+
+- Dutch
+- French
+- German
+- Hebrew
+- Italian
+- Portuguese
+- Spanish
+- Swedish
+- Swiss German
+- Turkish
+
+Download the one you need, unpack it into its own folder, and run:
+
+```bash
+# Per-run: pass the model folder explicitly
+yapsnap interview.mp3 --model /path/to/kroko-french
+
+# Or set it once as your default for the session
+export KROKO_MODEL=/path/to/kroko-french
+yapsnap interview.mp3
+```
+
+Each model is single-language, so to work across several languages keep them in separate folders and switch with `--model` (or re-export `KROKO_MODEL`) as you go. Any other sherpa-onnx streaming transducer with the standard `encoder` / `decoder` / `joiner` / `tokens.txt` layout works too, not just the Kroko ones.
+
+---
+
 ## Notes & limits
 
-- The default model is **English-only**. For other languages, supply a matching sherpa-onnx streaming transducer via `--model`.
+- The default model is **English**. For other languages, download a matching model and pass it with `--model` — see [Other languages](#other-languages) for the current list and instructions.
 - `--speed 1.5` shaves about a third off transcription time with minimal accuracy cost. Try `2.0` if you want it even faster, or `1.0` for noisy, mumbled, or fast-speech sources.
 - Some social-media URLs are geo-locked or login-walled; `yt-dlp` will say so explicitly.
 - This is a streaming model, so timestamps come from token positions in the recognized stream. They're accurate enough for navigation, not for subtitling-grade alignment.
