@@ -316,13 +316,21 @@ def _group_into_sentences(tokens: list[str], timestamps: list[float], speed: flo
     return sentences
 
 
-def transcribe(samples: np.ndarray, model_dir: Path,
-               timestamps: bool, speed: float) -> str:
-    import json
+def transcribe_sentences(samples: np.ndarray, model_dir: Path, speed: float
+                         ) -> tuple[str, Optional[list[tuple[float, str]]]]:
+    """Decode `samples` and return (plain_text, sentences).
+
+    `sentences` is a list of (original_time_seconds, text) tuples when this
+    sherpa-onnx build exposes alignment data, or None when it does not. The
+    start times are already scaled back to original-audio time by `speed`.
+
+    This is the structured core used by both plain transcription and the
+    diarization path (which needs per-sentence start times for alignment).
+    """
     import sherpa_onnx  # imported lazily so --help is fast
 
     if len(samples) == 0:
-        return ""
+        return "", []
 
     recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
         encoder=find_model_file(model_dir, "encoder"),
@@ -355,19 +363,76 @@ def transcribe(samples: np.ndarray, model_dir: Path,
     text = (text_result if isinstance(text_result, str)
             else getattr(text_result, "text", "") or "").strip()
 
+    toks, times = _try_extract_timestamps(recognizer, stream, text_result)
+    if not toks or not times or len(toks) != len(times):
+        return text, None  # no alignment available for this build
+
+    sentences = _group_into_sentences(toks, [float(t) for t in times], speed)
+    return text, sentences
+
+
+def transcribe(samples: np.ndarray, model_dir: Path,
+               timestamps: bool, speed: float) -> str:
+    text, sentences = transcribe_sentences(samples, model_dir, speed)
+
     if not timestamps:
         return text
 
-    toks, times = _try_extract_timestamps(recognizer, stream, text_result)
-    if not toks or not times or len(toks) != len(times):
+    if sentences is None:
         # No alignment data available for this build of sherpa-onnx; fall
         # back to plain text and warn the user once.
         print("warning: this sherpa-onnx build did not return timestamp data; "
               "emitting plain text instead", file=sys.stderr)
         return text
 
-    sentences = _group_into_sentences(toks, [float(t) for t in times], speed)
     return "\n".join(f"[{_format_mmss(t)}] {s}" for t, s in sentences)
+
+
+def transcribe_diarized(media_path: Path, model_dir: Path, speed: float,
+                        diarize_model: str, num_speakers: int) -> str:
+    """Transcribe with speaker labels.
+
+    ASR runs on the sped-up signal (fast); diarization runs on the SAME audio
+    decoded at 1.0x (sped-up audio wrecks segmentation + embeddings). Both
+    timelines live in original-audio seconds, so sentence start times and
+    speaker turns share one clock.
+
+    Output lines look like:  SPEAKER_00 [MM:SS]: text
+    """
+    import diarize as diar
+
+    # 1) ASR on sped-up audio -> sentences with original-time start seconds.
+    sped = decode_to_pcm(media_path, speed=speed)
+    _text, sentences = transcribe_sentences(sped, model_dir, speed)
+    if sentences is None:
+        raise RuntimeError(
+            "diarization needs sentence timestamps, but this sherpa-onnx build "
+            "did not return alignment data. Try a build that supports "
+            "timestamps, or run without --diarize."
+        )
+    if not sentences:
+        return ""
+
+    # 2) Diarization on original-speed audio.
+    cache = user_cache_dir() / "diarization-models"
+    seg_onnx, emb_onnx = diar.ensure_diarization_models(
+        diarize_model, cache, _download
+    )
+    pcm_1x = sped if abs(speed - 1.0) < 1e-5 else decode_to_pcm(media_path, speed=1.0)
+    turns = diar.diarize_pcm(
+        pcm_1x, seg_onnx, emb_onnx,
+        num_speakers=num_speakers,
+        num_threads=os.cpu_count() or 1,
+        show_progress=True,
+    )
+
+    # 3) Attach a speaker to each sentence and format.
+    labeled = diar.label_sentences(sentences, turns)
+    lines = []
+    for spk, t, text in labeled:
+        label = f"SPEAKER_{spk:02d}" if spk is not None else "SPEAKER_??"
+        lines.append(f"{label} [{_format_mmss(t)}]: {text}")
+    return "\n".join(lines)
 
 
 def _try_extract_timestamps(recognizer, stream, text_result):
@@ -455,6 +520,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--model", type=Path, default=None,
                     help="Path to a sherpa-onnx streaming transducer model directory "
                          "(or set KROKO_MODEL). Default: auto-download Kroko English.")
+    ap.add_argument("--diarize", action="store_true",
+                    help="Label speakers ('who spoke when'). Output lines become "
+                         "'SPEAKER_00 [MM:SS]: text'. Implies --timestamps. CPU-only, "
+                         "auto-downloads diarization models on first use.")
+    ap.add_argument("--diarize-model", choices=["pyannote", "reverb"], default="pyannote",
+                    help="Segmentation model for --diarize. 'pyannote' (CC-BY-4.0, "
+                         "default) or 'reverb' (more accurate, NON-COMMERCIAL license).")
+    ap.add_argument("--num-speakers", type=int, default=-1,
+                    help="Known speaker count for --diarize (default -1 = auto-detect). "
+                         "Set this when you know the count; auto-detection degrades "
+                         "above ~7 speakers.")
     args = ap.parse_args(argv)
 
     if args.speed <= 0:
@@ -489,14 +565,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                 return 1
 
         try:
-            samples = decode_to_pcm(media_path, speed=args.speed)
-        except Exception as e:
-            print(f"decode error: {e}", file=sys.stderr)
-            return 1
-
-        try:
-            text = transcribe(samples, model_dir,
-                              timestamps=args.timestamps, speed=args.speed)
+            if args.diarize:
+                text = transcribe_diarized(
+                    media_path, model_dir, speed=args.speed,
+                    diarize_model=args.diarize_model,
+                    num_speakers=args.num_speakers,
+                )
+            else:
+                samples = decode_to_pcm(media_path, speed=args.speed)
+                text = transcribe(samples, model_dir,
+                                  timestamps=args.timestamps, speed=args.speed)
         except Exception as e:
             print(f"transcription error: {e}", file=sys.stderr)
             return 1

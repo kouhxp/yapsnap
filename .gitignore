@@ -8,3 +8,21 @@ venv/
 transcripts/
 *_transcript.txt
 .pypirc
+
+# Diarization: downloaded models and any local copies / extracted dirs.
+# Models normally live in the user cache, but ignore them if a clone pulls
+# them into the repo dir for testing.
+*.onnx
+*.tar.bz2
+sherpa-onnx-pyannote-segmentation-3-0/
+sherpa-onnx-reverb-diarization-v1/
+*.rttm
+
+# Local test audio/video
+*.wav
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.flac
+*.opus

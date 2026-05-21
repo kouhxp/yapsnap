@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yapsnap"
-version = "0.1.0"
+version = "0.1.1"
 description = "Snap any video URL or local audio/video into a plaintext transcript. CPU-first, offline, single command."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [{ name = "yapsnap" }]
-keywords = ["asr", "transcription", "sherpa-onnx", "kroko", "yt-dlp", "youtube", "tiktok", "instagram", "transcribe"]
+keywords = ["asr", "transcription", "diarization", "speaker-diarization", "sherpa-onnx", "kroko", "yt-dlp", "youtube", "tiktok", "instagram", "transcribe"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -31,4 +31,4 @@ yapsnap = "yapsnap:main"
 transcribe = "yapsnap:main"
 
 [tool.setuptools]
-py-modules = ["yapsnap"]
+py-modules = ["yapsnap", "diarize"]
