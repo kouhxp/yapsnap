@@ -6,5 +6,5 @@ dist/
 .venv/
 venv/
 transcripts/
-*.txt
-!requirements.txt
+*_transcript.txt
+.pypirc
