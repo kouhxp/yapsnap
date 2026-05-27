@@ -66,8 +66,6 @@ SEGMENTATION_MODELS = {
     ),
 }
 
-DEFAULT_SEGMENTATION = "pyannote"
-
 import os
 
 # The en/zh CAM++ model the user asked about. Multilingual, ~27MB, Apache-2.0.
@@ -130,7 +128,7 @@ def ensure_diarization_models(
             f"choose from {sorted(SEGMENTATION_MODELS)}"
         )
 
-    archive_name, extract_dir_name, license_note = SEGMENTATION_MODELS[seg_key]
+    archive_name, extract_dir_name, _ = SEGMENTATION_MODELS[seg_key]
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     seg_dir = cache_dir / extract_dir_name
@@ -186,7 +184,7 @@ def _build_diarizer(seg_onnx: Path, emb_onnx: Path, num_speakers: int,
         raise RuntimeError(
             f"this sherpa-onnx build ({ver}) lacks the speaker-diarization API "
             f"(missing: {', '.join(missing)}). Upgrade with: "
-            f"pip install -U 'sherpa-onnx>=1.10'"
+            f"pip install -U 'sherpa-onnx>=1.13'"
         )
 
     config = sherpa_onnx.OfflineSpeakerDiarizationConfig(

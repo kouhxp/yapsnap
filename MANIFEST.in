@@ -1,0 +1,21 @@
+# MANIFEST.in — extra files to include in the yapsnap source distribution.
+#
+# setuptools already bundles the py-modules (yapsnap, diarize, cpuopt),
+# README.md and pyproject.toml. The lines below add the security-hardening
+# files so `pip install` from an sdist gets a verifiable, reproducible setup.
+
+# SHA-256 manifest of known-good model digests. yapsnap loads this at runtime
+# (see MODEL_CHECKSUMS_FILE in yapsnap.py), so it must also be installed beside
+# the module — see the [tool.setuptools] data-file entry in pyproject.toml.
+include model_checksums.sha256
+
+# Hash-pinned dependency lock for `pip install --require-hashes`.
+include requirements-lock.txt
+
+# Helper that regenerates the two files above.
+include scripts/gen_hashes.sh
+
+# Never ship caches / build cruft.
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.part

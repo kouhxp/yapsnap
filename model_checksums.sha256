@@ -1,0 +1,58 @@
+# yapsnap model integrity manifest
+# ----------------------------------
+# SHA-256 digests of every model file yapsnap may auto-download. Format is the
+# standard `sha256sum` layout so this file can be checked directly with:
+#
+#     sha256sum -c model_checksums.sha256        (run from the cache dir)
+#
+# yapsnap loads it via load_model_checksums() and verify_checksum() promotes a
+# downloaded file into the cache ONLY after its digest matches a line here.
+#
+# Policy is strict hard-fail, no opt-out:
+#   - match            -> file accepted
+#   - mismatch         -> hard failure (possible corruption or tampering)
+#   - filename absent  -> hard failure (unrecognised auto-download)
+#   - manifest missing -> hard failure (nothing can be verified)
+#
+# This gates AUTO-DOWNLOADS only. A model supplied with --model / KROKO_MODEL
+# loads from disk and is never checked here. To auto-download a new model (e.g.
+# another Kroko language), add its digest below first; otherwise fetch it
+# manually and point --model at its directory.
+#
+# Verification keys on the BASENAME only, so the path written beside a digest
+# is for human reference; `foo.onnx` and `diarization-models/foo.onnx` match
+# the same download.
+#
+# ---------------------------------------------------------------------------
+# REGENERATING / ADDING ENTRIES
+# ---------------------------------------------------------------------------
+# The digests below are real, for the exact released files yapsnap fetches. To
+# re-verify them, or to add a new auto-downloadable model, run on a trusted
+# machine with network access:
+#
+#     scripts/gen_hashes.sh --models
+#
+# It downloads each file from its canonical URL, hashes it, and prints
+# manifest-ready lines. Replace a digest only if you have independently
+# confirmed the upstream file legitimately changed -- a digest that shifts
+# unexpectedly is exactly what this manifest exists to catch.
+# ===========================================================================
+
+# --- Default Kroko English streaming model --------------------------------
+# Source: https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06
+d4881c57449d581e0770fd53fa66c2fdc6cd167d92ece7c715e603defc96d9d4  encoder.onnx
+455ba38466fce8d5a57e7db68a323b684079ca4d9e1dd93a740d9b2429aae3b1  decoder.onnx
+d406f616736350e2a7df3e39398b78eb2fc1a2ca6973a19d3853fa3227e25b52  joiner.onnx
+396dbeb5f4858875690716084f54e90d339679d0ba3e6b5b584f3d7589254d2d  tokens.txt
+
+# --- Diarization: speaker-segmentation archives ----------------------------
+# These are the .tar.bz2 archives as downloaded; _download() verifies the
+# archive, diarize.py then extracts model.onnx from it.
+# Source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-segmentation-models
+24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488  sherpa-onnx-pyannote-segmentation-3-0.tar.bz2
+615761e980be1688da0ef81618c056134d63aa55ea0a5f1494c47393b9398eab  sherpa-onnx-reverb-diarization-v1.tar.bz2
+
+# --- Diarization: speaker-embedding model ----------------------------------
+# Source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models
+# (Add a line for any alternative set via YAPSNAP_EMBEDDING_MODEL.)
+aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2  3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx

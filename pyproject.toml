@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yapsnap"
-version = "0.1.1"
+version = "0.1.2"
 description = "Snap any video URL or local audio/video into a plaintext transcript. CPU-first, offline, single command."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,8 +17,14 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
-    "sherpa-onnx>=1.10",
-    "numpy>=1.23",
+    "sherpa-onnx>=1.13",
+    # numpy capped below 2.0: sherpa-onnx is an onnxruntime-based compiled
+    # extension, and a module built against the NumPy 1.x ABI crashes at
+    # import time under NumPy 2.x (pip cannot detect this — it is a binary,
+    # not a dependency-metadata, conflict). 1.26 is the floor for Python 3.12
+    # wheels. If sherpa-onnx is later confirmed built against the NumPy 2.x
+    # ABI, raise this cap and regenerate the lock file.
+    "numpy>=1.26,<2",
     "yt-dlp>=2026.3.17",
 ]
 
@@ -31,4 +37,13 @@ yapsnap = "yapsnap:main"
 transcribe = "yapsnap:main"
 
 [tool.setuptools]
-py-modules = ["yapsnap", "diarize"]
+py-modules = ["yapsnap", "diarize", "cpuopt"]
+
+# Ship the SHA-256 model manifest alongside the modules. yapsnap.py resolves it
+# at runtime via Path(__file__).parent / "model_checksums.sha256"; installing it
+# into the same directory as the py-modules keeps that lookup working for both
+# `pip install .` and wheel installs. requirements-lock.txt and the helper
+# script ride along in the sdist via MANIFEST.in (they are not needed at
+# runtime, only for installing/regenerating).
+[tool.setuptools.data-files]
+"." = ["model_checksums.sha256"]
