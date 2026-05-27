@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yapsnap"
-version = "0.1.2"
+version = "0.1.2.1"
 description = "Snap any video URL or local audio/video into a plaintext transcript. CPU-first, offline, single command."
 readme = "README.md"
 requires-python = ">=3.9"

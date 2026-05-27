@@ -456,10 +456,15 @@ def _join_tokens(tokens: list[str]) -> str:
     return "".join(out).strip()
 
 
-def _group_into_sentences(tokens: list[str], timestamps: list[float], speed: float
+def _group_into_sentences(tokens: list[str], timestamps: list[float]
                           ) -> list[tuple[float, str]]:
     """Group tokens into sentences ending in .!? and tag each sentence with its
-    start time, scaled by `speed` to map back to original-audio time.
+    start time.
+
+    This function does NOT do any speed/unit conversion: `timestamps` must
+    already be on whatever clock the caller wants the output in. Callers are
+    responsible for converting sped-up-stream seconds to original-audio
+    seconds (multiply by `speed`) exactly once, before calling this.
     """
     sentences: list[tuple[float, str]] = []
     buf_tokens: list[str] = []
@@ -473,7 +478,7 @@ def _group_into_sentences(tokens: list[str], timestamps: list[float], speed: flo
         if tok and tok[-1] in end_chars:
             text = _join_tokens(buf_tokens)
             if text:
-                sentences.append(((buf_start or 0.0) * speed, text))
+                sentences.append((buf_start or 0.0, text))
             buf_tokens = []
             buf_start = None
 
@@ -481,7 +486,7 @@ def _group_into_sentences(tokens: list[str], timestamps: list[float], speed: flo
     if buf_tokens:
         text = _join_tokens(buf_tokens)
         if text:
-            sentences.append(((buf_start or 0.0) * speed, text))
+            sentences.append((buf_start or 0.0, text))
     return sentences
 
 
@@ -614,7 +619,10 @@ def _transcribe_single(
     if not toks or not times or len(toks) != len(times):
         return text, None
 
-    sentences = _group_into_sentences(toks, [float(t) for t in times], speed)
+    # sherpa-onnx timestamps are in sped-up-stream seconds; scale to
+    # original-audio time exactly once here.
+    orig_times = [float(t) * speed for t in times]
+    sentences = _group_into_sentences(toks, orig_times)
     return text, sentences
 
 
@@ -766,7 +774,7 @@ def _transcribe_batched(
         )
 
     text = _join_tokens(all_toks)
-    sentences = _group_into_sentences(all_toks, all_times, speed)
+    sentences = _group_into_sentences(all_toks, all_times)
     return text, sentences
 
 
