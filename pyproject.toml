@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yapsnap"
-version = "0.1.2.1"
+version = "0.1.3"
 description = "Snap any video URL or local audio/video into a plaintext transcript. CPU-first, offline, single command."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,13 +37,15 @@ yapsnap = "yapsnap:main"
 transcribe = "yapsnap:main"
 
 [tool.setuptools]
-py-modules = ["yapsnap", "diarize", "cpuopt"]
+packages = ["yapsnap"]
 
-# Ship the SHA-256 model manifest alongside the modules. yapsnap.py resolves it
-# at runtime via Path(__file__).parent / "model_checksums.sha256"; installing it
-# into the same directory as the py-modules keeps that lookup working for both
-# `pip install .` and wheel installs. requirements-lock.txt and the helper
-# script ride along in the sdist via MANIFEST.in (they are not needed at
-# runtime, only for installing/regenerating).
-[tool.setuptools.data-files]
-"." = ["model_checksums.sha256"]
+# Ship the SHA-256 model manifest INSIDE the package. yapsnap/__init__.py
+# resolves it at runtime via Path(__file__).resolve().parent /
+# "model_checksums.sha256"; package-data installs it into the package
+# directory, so that lookup works for `pip install .`, wheels, and sdist
+# installs alike. (The previous [tool.setuptools.data-files] entry installed
+# it relative to sys.prefix — NOT beside the module — which is why it was
+# reported missing at runtime.) requirements-lock.txt and the helper script
+# are sdist-only extras carried by MANIFEST.in; they are not needed at runtime.
+[tool.setuptools.package-data]
+yapsnap = ["model_checksums.sha256"]

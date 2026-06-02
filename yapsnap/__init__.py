@@ -74,7 +74,7 @@ def _thread_budget() -> int:
     SMT-aware guess so the tool still runs.
     """
     try:
-        import cpuopt
+        from . import cpuopt
         return max(1, cpuopt.get_plan().num_threads)
     except Exception:
         logical = os.cpu_count() or 1
@@ -810,7 +810,7 @@ def transcribe_diarized(media_path: Path, model_dir: Path, speed: float,
 
     Output lines look like:  SPEAKER_00 [MM:SS]: text
     """
-    import diarize as diar
+    from . import diarize as diar
 
     # 1) ASR on sped-up audio -> sentences with original-time start seconds.
     sped = decode_to_pcm(media_path, speed=speed)
