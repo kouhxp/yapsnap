@@ -38,7 +38,7 @@ FEATURE_DIM = 80
 # Auto-download source for the default Kroko English streaming model.
 # The repo ships plain .onnx (no .int8 variants); find_model_file still prefers
 # int8 if a custom --model dir provides them.
-DEFAULT_MODEL_REPO = "csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06"
+DEFAULT_MODEL_REPO = "kouhxp/sherpa-onnx-streaming-zipformer-en-kroko"
 DEFAULT_MODEL_FILES = ("encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt")
 HF_BASE = "https://huggingface.co"
 HTTP_UA = "yapsnap/0.1 (+https://github.com/)"
@@ -59,6 +59,28 @@ HTTP_UA = "yapsnap/0.1 (+https://github.com/)"
 MODEL_CHECKSUMS_FILE = Path(__file__).resolve().parent / "model_checksums.sha256"
 
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+# Language-to-HuggingFace-repo mapping for Kroko streaming transducer models.
+# Each repo contains encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt.
+LANG_MODELS = {
+    "de": "kouhxp/sherpa-onnx-streaming-zipformer-de-kroko",
+    "en": "kouhxp/sherpa-onnx-streaming-zipformer-en-kroko",
+    "es": "kouhxp/sherpa-onnx-streaming-zipformer-es-kroko",
+    "fr": "kouhxp/sherpa-onnx-streaming-zipformer-fr-kroko",
+    "it": "kouhxp/sherpa-onnx-streaming-zipformer-it-kroko",
+    "iw": "kouhxp/sherpa-onnx-streaming-zipformer-iw-kroko",
+    "nl": "kouhxp/sherpa-onnx-streaming-zipformer-nl-kroko",
+    "pt": "kouhxp/sherpa-onnx-streaming-zipformer-pt-kroko",
+    "sv": "kouhxp/sherpa-onnx-streaming-zipformer-sv-kroko",
+    "tr": "kouhxp/sherpa-onnx-streaming-zipformer-tr-kroko",
+}
+
+LANG_NAMES = {
+    "de": "German",  "en": "English",  "es": "Spanish",
+    "fr": "French",  "it": "Italian",  "iw": "Hebrew",
+    "nl": "Dutch",   "pt": "Portuguese","sv": "Swedish",
+    "tr": "Turkish",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -142,17 +164,17 @@ def _sha256_file(path: Path) -> str:
 
 
 def load_model_checksums() -> dict[str, str]:
-    """Parse model_checksums.sha256 into {filename: sha256-hex}.
+    """Parse model_checksums.sha256 into {name: sha256-hex}.
 
     Format is the standard `sha256sum` layout, one entry per line:
 
-        <64-hex-digest>  <filename>
+        <64-hex-digest>  <name>
 
-    Blank lines and `#` comments are ignored. Only the basename of the second
-    field is kept, so a digest written for `diarization-models/foo.onnx` still
-    matches a download whose dest is `<cache>/foo.onnx`. A missing or
-    unreadable manifest yields an empty dict; verify_checksum() turns that into
-    a hard failure rather than silently trusting the download.
+    Blank lines and `#` comments are ignored. The full second field is kept
+    as the key (e.g. ``kouhxp/sherpa-onnx-streaming-zipformer-fr-kroko/encoder.onnx``),
+    so different repos with identically named files get distinct entries.
+    A missing or unreadable manifest yields an empty dict; verify_checksum()
+    turns that into a hard failure rather than silently trusting the download.
     """
     checksums: dict[str, str] = {}
     if not MODEL_CHECKSUMS_FILE.is_file():
@@ -173,16 +195,22 @@ def load_model_checksums() -> dict[str, str]:
         if name.startswith("*"):
             name = name[1:]
         if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
-            checksums[os.path.basename(name)] = digest
+            checksums[name] = digest
     return checksums
 
 
-def verify_checksum(path: Path) -> None:
+def verify_checksum(path: Path, repo: Optional[str] = None) -> None:
     """Verify a downloaded file against the SHA-256 manifest, or raise.
 
     Hard-fail policy (see the module comment above): a missing manifest, an
     unlisted file, or a digest mismatch all raise RuntimeError. There is no
     success path that skips verification.
+
+    When `repo` is given the lookup key is ``repo/filename`` (e.g.
+    ``kouhxp/sherpa-onnx-streaming-zipformer-fr-kroko/encoder.onnx``), so
+    different language models with identically named files get distinct
+    digests.  Falls back to a bare-filename lookup for backward compat with
+    diarization entries that are stored without a repo prefix.
 
     Raising happens AFTER the caller has written the file to a temp path but
     BEFORE it is promoted to its final name, so a rejected file never lands in
@@ -205,11 +233,16 @@ def verify_checksum(path: Path) -> None:
         )
 
     name = path.name
-    expected = checksums.get(name)
+    # Try repo-qualified key first, then bare filename as fallback.
+    qualified = f"{repo}/{name}" if repo else None
+    expected = checksums.get(qualified) if qualified else None
+    if expected is None:
+        expected = checksums.get(name)
 
+    lookup_desc = qualified or name
     if expected is None:
         raise RuntimeError(
-            f"{name} is not listed in {MODEL_CHECKSUMS_FILE.name}; yapsnap "
+            f"{lookup_desc} is not listed in {MODEL_CHECKSUMS_FILE.name}; yapsnap "
             f"refuses to use an unrecognised auto-downloaded model. If this is "
             f"a model you trust, add its sha256 digest to the manifest "
             f"(scripts/gen_hashes.sh --models), or fetch it yourself and pass "
@@ -219,7 +252,7 @@ def verify_checksum(path: Path) -> None:
     actual = _sha256_file(path)
     if actual != expected:
         raise RuntimeError(
-            f"checksum mismatch for {name}:\n"
+            f"checksum mismatch for {lookup_desc}:\n"
             f"  expected sha256 {expected}\n"
             f"  got      sha256 {actual}\n"
             f"The download may be corrupt or tampered with; refusing to use it."
@@ -227,13 +260,16 @@ def verify_checksum(path: Path) -> None:
     print(f"  verified {name} (sha256 ok)", file=sys.stderr)
 
 
-def _download(url: str, dest: Path) -> None:
+def _download(url: str, dest: Path, repo: Optional[str] = None) -> None:
     """Download a URL to a file, showing simple progress.
 
     Sends a User-Agent (HuggingFace sometimes rejects the default urllib UA).
     Sanity-checks tokens.txt as text and .onnx as binary > 1KB, so we fail loud
     instead of writing an HTML error page to disk. Finally verifies the file
     against the SHA-256 manifest before promoting it into place.
+
+    `repo` is the HuggingFace repo (e.g. ``kouhxp/sherpa-onnx-streaming-
+    zipformer-fr-kroko``) used to look up the repo-qualified checksum.
     """
     print(f"  fetching {url}", file=sys.stderr)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -278,38 +314,48 @@ def _download(url: str, dest: Path) -> None:
     verify_target = tmp.with_name(dest.name)
     tmp.rename(verify_target)
     try:
-        verify_checksum(verify_target)
+        verify_checksum(verify_target, repo=repo)
     except Exception:
         verify_target.unlink(missing_ok=True)
         raise
     verify_target.replace(dest)
 
 
-def ensure_default_model() -> Path:
-    """Download the default Kroko English model into the user cache if missing.
-    Returns the directory containing encoder/decoder/joiner/tokens."""
-    cache = user_cache_dir() / DEFAULT_MODEL_REPO.replace("/", "__")
+def ensure_model(repo: str) -> Path:
+    """Download a model repo into the user cache if missing.
+
+    Returns the directory containing encoder/decoder/joiner/tokens.
+    Works for any HuggingFace repo that contains those four files.
+    """
+    cache = user_cache_dir() / repo.replace("/", "__")
     cache.mkdir(parents=True, exist_ok=True)
-    missing = [f for f in DEFAULT_MODEL_FILES if not (cache / f).is_file()]
-    if not missing:
+
+    needed = [f for f in DEFAULT_MODEL_FILES if not (cache / f).is_file()]
+    if not needed:
         return cache
 
-    print(f"Downloading Kroko English model to {cache}", file=sys.stderr)
-    for fname in missing:
-        url = f"{HF_BASE}/{DEFAULT_MODEL_REPO}/resolve/main/{fname}"
+    print(f"Downloading model from {repo} to {cache}", file=sys.stderr)
+    for fname in needed:
+        url = f"{HF_BASE}/{repo}/resolve/main/{fname}"
         try:
-            _download(url, cache / fname)
+            _download(url, cache / fname, repo=repo)
         except Exception as e:
             raise RuntimeError(
                 f"failed to download {fname} from {url}: {e}\n"
-                f"You can download the model manually from {HF_BASE}/{DEFAULT_MODEL_REPO} "
+                f"You can download the model manually from {HF_BASE}/{repo} "
                 f"and pass its directory via --model."
             ) from e
     return cache
 
 
-def resolve_model_dir(model_arg: Optional[Path]) -> Path:
-    """Resolve the model directory from CLI arg, env var, or auto-download."""
+def ensure_default_model() -> Path:
+    """Download the default Kroko English model into the user cache if missing."""
+    return ensure_model(DEFAULT_MODEL_REPO)
+
+
+def resolve_model_dir(model_arg: Optional[Path], lang: Optional[str] = None) -> Path:
+    """Resolve the model directory from CLI arg, env var, --lang, or auto-download."""
+    # Explicit --model takes priority
     candidate = model_arg or (
         Path(os.environ["KROKO_MODEL"]) if os.environ.get("KROKO_MODEL") else None
     )
@@ -319,6 +365,18 @@ def resolve_model_dir(model_arg: Optional[Path]) -> Path:
         if not (candidate / "tokens.txt").is_file():
             raise FileNotFoundError(f"tokens.txt not found in {candidate}")
         return candidate
+
+    # --lang selects a language-specific model
+    if lang is not None:
+        lang = lang.lower()
+        if lang not in LANG_MODELS:
+            available = ", ".join(sorted(LANG_MODELS.keys()))
+            raise ValueError(
+                f"unsupported language '{lang}'. Available: {available}"
+            )
+        return ensure_model(LANG_MODELS[lang])
+
+    # Default: English
     return ensure_default_model()
 
 
@@ -933,6 +991,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--model", type=Path, default=None,
                     help="Path to a sherpa-onnx streaming transducer model directory "
                          "(or set KROKO_MODEL). Default: auto-download Kroko English.")
+    ap.add_argument("--lang", type=str, default=None,
+                    help="Language code for transcription model. "
+                    "Downloads the matching Kroko model automatically. "
+                    "Available: " + ", ".join(
+                        f"{k} ({v})" for k, v in sorted(LANG_NAMES.items())
+                    ) + ". Default: en (English). "
+                    "Ignored if --model is given.")
     ap.add_argument("--diarize", action="store_true",
                     help="Label speakers ('who spoke when'). Output lines become "
                          "'SPEAKER_00 [MM:SS]: text'. Implies --timestamps. CPU-only, "
@@ -962,7 +1027,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Resolve the model first so we fail fast if it can't be obtained.
     try:
-        model_dir = resolve_model_dir(args.model)
+        model_dir = resolve_model_dir(args.model, lang=args.lang)
     except Exception as e:
         print(f"model error: {e}", file=sys.stderr)
         return 1

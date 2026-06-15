@@ -18,7 +18,7 @@ That's it. You get a `.txt` next to your shell, transcribed on your CPU, in less
 - 🌐 **Any video URL, plus local files.** YouTube. X. TikTok. Instagram Reels. Direct `.mp4`/`.mp3` links. Or just point it at a file on disk. yt-dlp handles the fetch, ffmpeg handles the decode, the rest is yours.
 - 📴 **Offline after first run.** ~80 MB model downloads once to your cache and stays there. No API keys. No quotas. Your audio never leaves your machine.
 - 🪶 **Lean deps.** `sherpa-onnx`, `numpy`, `yt-dlp` — that's the whole runtime, diarization included. No PyTorch, no cloud SDKs.
-- 🗣 **Ten-plus languages.** English out of the box; French, German, Spanish, Italian, Portuguese, Dutch, Swedish, Swiss German, Hebrew, and Turkish are a one-line `--model` swap away. See [Other languages](#other-languages).
+- 🗣 **Ten-plus languages.** English out of the box; French, German, Spanish, Italian, Portuguese, Dutch, Swedish, Swiss German, Hebrew, and Turkish are a one-flag `--lang` swap away. See [Other languages](#other-languages).
 - ⏱ **Sentence-level timestamps when you want them.** `--timestamps` adds `[MM:SS]` per sentence using Kroko's built-in punctuation. Timing stays correct even when you transcribe at 2x.
 - 🗣️ **Speaker labels, optional.** `--diarize` answers "who spoke when" and prefixes each line with `SPEAKER_00`, `SPEAKER_01`, … Still CPU-only, still ONNX — no PyTorch, no extra runtime deps. See [Diarization](#diarization).
 
@@ -35,6 +35,7 @@ pip install yapsnap
 yapsnap https://www.tiktok.com/@user/video/7234567890123456789
 yapsnap meeting.mp4 --timestamps
 yapsnap interview.mp3 --diarize          # label speakers
+yapsnap interview.mp3 --lang fr          # French audio? one flag
 yapsnap podcast.mp3 -o ~/notes/episode.txt
 ```
 
@@ -107,6 +108,10 @@ yapsnap interview.mp3 --diarize
 # Speaker labels with a known speaker count (more reliable than auto-detect)
 yapsnap call.mp3 --diarize --num-speakers 2
 
+# Transcribe non-English audio (downloads matching model automatically)
+yapsnap interview.mp3 --lang fr
+yapsnap podcast.mp3 --lang de --timestamps
+
 # Custom output path
 yapsnap input.mp4 -o ./transcripts/talk.txt
 
@@ -165,6 +170,7 @@ Speaker numbers are assigned in order of appearance and are stable within a sing
 | `--threads`       | ONNX threads per worker. Default `0` (autodetect). See [Performance](#performance). |
 | `--keep-audio`    | Keep the downloaded audio (URL inputs only).                         |
 | `--model`         | Override the model directory. Also reads `KROKO_MODEL` env var.      |
+| `--lang`          | Language code (e.g. `fr`, `de`). Auto-downloads the matching Kroko model. See [Other languages](#other-languages). Ignored if `--model` is given. |
 
 ---
 
@@ -214,22 +220,29 @@ If you use `--diarize`, the segmentation and embedding models download to a `dia
 
 ## Other languages
 
-The default model is English, but yapsnap isn't limited to it. To transcribe another language, just download the matching model and point yapsnap at it — no code changes, no reinstall.
+The default model is English, but yapsnap isn't limited to it. The easiest way to transcribe another language is `--lang`:
 
-Kroko publishes streaming models for a growing list of languages on Hugging Face: <https://huggingface.co/Banafo/Kroko-ASR/tree/main>. As of now that includes:
+```bash
+yapsnap interview.mp3 --lang fr          # French
+yapsnap podcast.mp3 --lang de            # German
+yapsnap meeting.mp4 --lang es --timestamps  # Spanish with timestamps
+```
 
-- Dutch
-- French
-- German
-- Hebrew
-- Italian
-- Portuguese
-- Spanish
-- Swedish
-- Swiss German
-- Turkish
+The first run for a given language downloads the matching Kroko model (~80 MB) to your cache; every run after is offline. Available language codes:
 
-Download the one you need, unpack it into its own folder, and run:
+| Code | Language   | Code | Language   |
+|------|------------|------|------------|
+| `de` | German     | `iw` | Hebrew     |
+| `en` | English    | `nl` | Dutch      |
+| `es` | Spanish    | `pt` | Portuguese |
+| `fr` | French     | `sv` | Swedish    |
+| `it` | Italian    | `tr` | Turkish    |
+
+`--lang` is ignored if `--model` is also given — an explicit model always wins.
+
+### Manual model setup
+
+If you prefer to manage models yourself, or want to use a model not in the table above (Swiss German, larger Kroko variants, or any other sherpa-onnx streaming transducer), download it, unpack it into its own folder, and run:
 
 ```bash
 # Per-run: pass the model folder explicitly
@@ -239,6 +252,8 @@ yapsnap interview.mp3 --model /path/to/kroko-french
 export KROKO_MODEL=/path/to/kroko-french
 yapsnap interview.mp3
 ```
+
+Kroko publishes streaming models for a growing list of languages on Hugging Face: <https://huggingface.co/Banafo/Kroko-ASR/tree/main>.
 
 Each model is single-language, so to work across several languages keep them in separate folders and switch with `--model` (or re-export `KROKO_MODEL`) as you go. Any other sherpa-onnx streaming transducer with the standard `encoder` / `decoder` / `joiner` / `tokens.txt` layout works too, not just the Kroko ones.
 
