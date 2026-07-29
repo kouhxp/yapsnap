@@ -41,10 +41,31 @@ LANG_REPOS=(
     "kouhxp/sherpa-onnx-streaming-zipformer-tr-kroko"
 )
 
-# Diarization models — add entries here when diarize.py auto-downloads
-# files that need verification.  Format: "repo  filename"
-# These are stored as bare filenames in the manifest (no repo prefix).
-DIARIZATION_FILES=()
+# Diarization models — must stay in sync with SEGMENTATION_MODELS and the
+# documented YAPSNAP_EMBEDDING_MODEL values in yapsnap/diarize.py.
+#
+# These come from k2-fsa/sherpa-onnx GitHub releases, NOT from HuggingFace:
+# diarize.py verifies the segmentation .tar.bz2 *archive itself* (that is the
+# download destination, before extraction), and those archives are published
+# only as release assets.  Hashing a HuggingFace copy would therefore produce a
+# digest that never matches what _download() actually sees.
+#
+# Format: "<base-url>  <filename>".  Stored as bare filenames in the manifest
+# (no repo prefix), which is what verify_checksum() falls back to.
+SEG_BASE="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models"
+# NB: upstream really does spell this release tag "recongition".
+EMB_BASE="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models"
+
+DIARIZATION_FILES=(
+    # Segmentation — both --diarize-model choices.
+    "$SEG_BASE  sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+    "$SEG_BASE  sherpa-onnx-reverb-diarization-v1.tar.bz2"
+    # Embedding — the default plus every alternative diarize.py documents for
+    # YAPSNAP_EMBEDDING_MODEL, since any of them can be auto-downloaded.
+    "$EMB_BASE  3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+    "$EMB_BASE  3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+    "$EMB_BASE  3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+)
 
 # ---------------------------------------------------------------------------
 
@@ -132,28 +153,34 @@ EOF
         echo ""
     done
 
-    # Diarization models (bare-filename entries).
-    for entry in "${DIARIZATION_FILES[@]}"; do
-        repo=$(echo "$entry" | awk '{print $1}')
-        fname=$(echo "$entry" | awk '{print $2}')
-        repo_dir="$CACHE/${repo//\//__}"
-        mkdir -p "$repo_dir"
-        dest="$repo_dir/$fname"
-        url="$HF_BASE/$repo/resolve/main/$fname"
+    # Diarization models (bare-filename entries, from GitHub release assets).
+    if (( ${#DIARIZATION_FILES[@]} > 0 )); then
+        echo "--- diarization models ---"
 
-        if [[ -f "$dest" ]]; then
-            echo "  [cached] $fname ($repo)"
-        else
-            echo "  [fetch]  $fname ($repo)"
-            curl -fSL --retry 3 --retry-delay 5 \
-                 -H "User-Agent: yapsnap/gen_hashes" \
-                 -o "$dest.part" "$url"
-            mv "$dest.part" "$dest"
-        fi
+        diar_dir="$CACHE/diarization"
+        mkdir -p "$diar_dir"
 
-        digest=$($SHA_CMD "$dest" | awk '{print $1}')
-        echo "$digest  $fname" >> "$MANIFEST"
-    done
+        for entry in "${DIARIZATION_FILES[@]}"; do
+            base=${entry%%[[:space:]]*}
+            fname=${entry##*[[:space:]]}
+            dest="$diar_dir/$fname"
+            url="$base/$fname"
+
+            if [[ -f "$dest" ]]; then
+                echo "  [cached] $fname"
+            else
+                echo "  [fetch]  $fname"
+                curl -fSL --retry 3 --retry-delay 5 \
+                     -H "User-Agent: yapsnap/gen_hashes" \
+                     -o "$dest.part" "$url"
+                mv "$dest.part" "$dest"
+            fi
+
+            digest=$($SHA_CMD "$dest" | awk '{print $1}')
+            echo "$digest  $fname" >> "$MANIFEST"
+        done
+        echo ""
+    fi
 
     echo "==> Wrote $MANIFEST"
     wc -l "$MANIFEST"
