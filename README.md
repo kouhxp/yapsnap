@@ -164,6 +164,7 @@ Speaker numbers are assigned in order of appearance and are stable within a sing
 | `--timestamps`    | Emit `[MM:SS] sentence.` lines instead of a single paragraph.        |
 | `--diarize`       | Label speakers (`SPEAKER_00 [MM:SS]: …`). Implies `--timestamps`.     |
 | `--diarize-model` | Segmentation model: `pyannote` (default) or `reverb`. See below.     |
+| `--diarize-model-dir` | Path to a local directory with diarization models. Bypasses auto-download. |
 | `--num-speakers`  | Known speaker count for `--diarize`. Default `-1` (auto-detect).     |
 | `--speed`         | Pre-transcription speedup factor, pitch preserved. Default `1.4`.    |
 | `--workers`       | Chunks to decode in parallel processes. Default `0` (autodetect).    |
@@ -308,7 +309,9 @@ yapsnap panel.mp4 --diarize --diarize-model reverb
 - **Speaker counting weakens past ~7 speakers.** Pass `--num-speakers` when you know it.
 - **Labels are per-run.** `SPEAKER_00` is not the same person across different files.
 
-To override the embedding model (for example if the default asset name ever changes), set `YAPSNAP_EMBEDDING_MODEL` to a different filename from the sherpa-onnx speaker-recognition release.
+To override the embedding model (for example if the default asset name ever changes), set `YAPSNAP_EMBEDDING_MODEL` to a different `.onnx` filename from the [diarization model repo](https://huggingface.co/kouhxp/sherpa-onnx-diarization-models).
+
+To skip auto-download entirely and use local diarization models, pass `--diarize-model-dir` pointing to a directory that contains the segmentation model (an extracted subdirectory with `model.onnx`) and the embedding `.onnx` file.
 
 ---
 

@@ -44,27 +44,22 @@ LANG_REPOS=(
 # Diarization models — must stay in sync with SEGMENTATION_MODELS and the
 # documented YAPSNAP_EMBEDDING_MODEL values in yapsnap/diarize.py.
 #
-# These come from k2-fsa/sherpa-onnx GitHub releases, NOT from HuggingFace:
-# diarize.py verifies the segmentation .tar.bz2 *archive itself* (that is the
-# download destination, before extraction), and those archives are published
-# only as release assets.  Hashing a HuggingFace copy would therefore produce a
-# digest that never matches what _download() actually sees.
+# All diarization files are mirrored in a single HuggingFace repo so that
+# diarize.py and this script use the same base URL and byte-identical blobs.
 #
 # Format: "<base-url>  <filename>".  Stored as bare filenames in the manifest
 # (no repo prefix), which is what verify_checksum() falls back to.
-SEG_BASE="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models"
-# NB: upstream really does spell this release tag "recongition".
-EMB_BASE="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models"
+DIAR_BASE="https://huggingface.co/kouhxp/sherpa-onnx-diarization-models/resolve/main"
 
 DIARIZATION_FILES=(
     # Segmentation — both --diarize-model choices.
-    "$SEG_BASE  sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-    "$SEG_BASE  sherpa-onnx-reverb-diarization-v1.tar.bz2"
+    "$DIAR_BASE  sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+    "$DIAR_BASE  sherpa-onnx-reverb-diarization-v1.tar.bz2"
     # Embedding — the default plus every alternative diarize.py documents for
     # YAPSNAP_EMBEDDING_MODEL, since any of them can be auto-downloaded.
-    "$EMB_BASE  3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
-    "$EMB_BASE  3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
-    "$EMB_BASE  3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+    "$DIAR_BASE  3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+    "$DIAR_BASE  3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+    "$DIAR_BASE  3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 )
 
 # ---------------------------------------------------------------------------

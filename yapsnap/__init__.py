@@ -241,12 +241,31 @@ def verify_checksum(path: Path, repo: Optional[str] = None) -> None:
 
     lookup_desc = qualified or name
     if expected is None:
+        # Tailor the advice to the kind of model: diarization files are stored
+        # as bare filenames (no repo prefix), so the absence of a qualified key
+        # is a reliable signal.
+        if qualified is None or qualified not in checksums:
+            is_diar = any(
+                kw in name.lower()
+                for kw in ("segmentation", "reverb", "campplus", "eres2net",
+                           "3dspeaker", "diarization")
+            )
+        else:
+            is_diar = False
+        if is_diar:
+            override_hint = (
+                "fetch the diarization models yourself and pass their "
+                "directory with --diarize-model-dir"
+            )
+        else:
+            override_hint = (
+                "fetch it yourself and pass its directory with --model"
+            )
         raise RuntimeError(
             f"{lookup_desc} is not listed in {MODEL_CHECKSUMS_FILE.name}; yapsnap "
             f"refuses to use an unrecognised auto-downloaded model. If this is "
             f"a model you trust, add its sha256 digest to the manifest "
-            f"(scripts/gen_hashes.sh --models), or fetch it yourself and pass "
-            f"its directory with --model."
+            f"(scripts/gen_hashes.sh --models), or {override_hint}."
         )
 
     actual = _sha256_file(path)
@@ -857,8 +876,72 @@ def transcribe(samples: np.ndarray, model_dir: Path,
     return "\n".join(f"[{_format_mmss(t)}] {s}" for t, s in sentences)
 
 
+def _resolve_local_diarize_dir(d: Path) -> tuple[Path, Path]:
+    """Resolve segmentation and embedding .onnx from a user-supplied directory.
+
+    Expects the directory to contain a segmentation model (either a subdirectory
+    with model.onnx, or a file whose name contains 'segmentation' or 'reverb')
+    and an embedding .onnx (name contains 'campplus' or 'eres2net' or
+    'embedding'). Falls back to picking by elimination when exactly two .onnx
+    files exist.
+    """
+    if not d.is_dir():
+        raise FileNotFoundError(f"--diarize-model-dir not found: {d}")
+
+    seg_onnx: Optional[Path] = None
+    emb_onnx: Optional[Path] = None
+
+    # Check for extracted segmentation subdirectories (the common layout after
+    # extracting the upstream .tar.bz2 archives).
+    for sub in d.iterdir():
+        candidate = sub / "model.onnx" if sub.is_dir() else None
+        if candidate and candidate.is_file():
+            seg_onnx = candidate
+            break
+
+    # Scan top-level .onnx files.
+    onnx_files = sorted(f for f in d.iterdir() if f.suffix == ".onnx" and f.is_file())
+
+    if seg_onnx is None:
+        for f in onnx_files:
+            low = f.name.lower()
+            if "segmentation" in low or "reverb" in low:
+                seg_onnx = f
+                break
+
+    for f in onnx_files:
+        low = f.name.lower()
+        if "campplus" in low or "eres2net" in low or "embedding" in low:
+            emb_onnx = f
+            break
+
+    # Fallback: if exactly two .onnx and we identified one, the other is the
+    # remaining role.
+    if len(onnx_files) == 2 and sum(x is not None for x in (seg_onnx, emb_onnx)) == 1:
+        other = [f for f in onnx_files if f != seg_onnx and f != emb_onnx][0]
+        if seg_onnx is None:
+            seg_onnx = other
+        else:
+            emb_onnx = other
+
+    if seg_onnx is None or emb_onnx is None:
+        missing = []
+        if seg_onnx is None:
+            missing.append("segmentation model.onnx")
+        if emb_onnx is None:
+            missing.append("embedding .onnx")
+        raise FileNotFoundError(
+            f"could not find {' or '.join(missing)} in {d}. "
+            f"The directory should contain the extracted segmentation model "
+            f"(a subdirectory with model.onnx) and an embedding .onnx file."
+        )
+
+    return seg_onnx, emb_onnx
+
+
 def transcribe_diarized(media_path: Path, model_dir: Path, speed: float,
-                        diarize_model: str, num_speakers: int) -> str:
+                        diarize_model: str, num_speakers: int,
+                        diarize_model_dir: Optional[Path] = None) -> str:
     """Transcribe with speaker labels.
 
     ASR runs on the sped-up signal (fast); diarization runs on the SAME audio
@@ -883,10 +966,13 @@ def transcribe_diarized(media_path: Path, model_dir: Path, speed: float,
         return ""
 
     # 2) Diarization on original-speed audio.
-    cache = user_cache_dir() / "diarization-models"
-    seg_onnx, emb_onnx = diar.ensure_diarization_models(
-        diarize_model, cache, _download
-    )
+    if diarize_model_dir is not None:
+        seg_onnx, emb_onnx = _resolve_local_diarize_dir(diarize_model_dir)
+    else:
+        cache = user_cache_dir() / "diarization-models"
+        seg_onnx, emb_onnx = diar.ensure_diarization_models(
+            diarize_model, cache, _download
+        )
     pcm_1x = sped if abs(speed - 1.0) < 1e-5 else decode_to_pcm(media_path, speed=1.0)
     turns = diar.diarize_pcm(
         pcm_1x, seg_onnx, emb_onnx,
@@ -1005,6 +1091,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--diarize-model", choices=["pyannote", "reverb"], default="pyannote",
                     help="Segmentation model for --diarize. 'pyannote' (CC-BY-4.0, "
                          "default) or 'reverb' (more accurate, NON-COMMERCIAL license).")
+    ap.add_argument("--diarize-model-dir", type=Path, default=None,
+                    help="Path to a local directory containing diarization model "
+                         "files (segmentation model.onnx and embedding .onnx). "
+                         "Bypasses auto-download. Useful when the default download "
+                         "fails or you want to use your own models.")
     ap.add_argument("--num-speakers", type=int, default=-1,
                     help="Known speaker count for --diarize (default -1 = auto-detect). "
                          "Set this when you know the count; auto-detection degrades "
@@ -1057,6 +1148,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 text = transcribe_diarized(
                     media_path, model_dir, speed=args.speed,
                     diarize_model=args.diarize_model,
+                    diarize_model_dir=args.diarize_model_dir,
                     num_speakers=args.num_speakers,
                 )
             else:

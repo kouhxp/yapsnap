@@ -47,10 +47,8 @@ from typing import Optional
 # existing _download() helper can fetch (it only special-cases tokens.txt vs
 # .onnx for sanity checks; we extend that below for .tar.bz2).
 
-_SEG_BASE = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-             "speaker-segmentation-models")
-_EMB_BASE = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-             "speaker-recongition-models")  # NB: upstream spells it "recongition"
+_DIAR_BASE = ("https://huggingface.co/kouhxp/"
+              "sherpa-onnx-diarization-models/resolve/main")
 
 # segmentation key -> (archive filename, extracted dir name, license note)
 SEGMENTATION_MODELS = {
@@ -142,7 +140,7 @@ def ensure_diarization_models(
             )
         archive_path = cache_dir / archive_name
         if not archive_path.is_file():
-            download_fn(f"{_SEG_BASE}/{archive_name}", archive_path)
+            download_fn(f"{_DIAR_BASE}/{archive_name}", archive_path)
         print(f"  extracting {archive_name}", file=sys.stderr)
         _extract_tar_bz2(archive_path, seg_dir)
         archive_path.unlink(missing_ok=True)
@@ -153,7 +151,7 @@ def ensure_diarization_models(
 
     emb_onnx = cache_dir / EMBEDDING_MODEL_FILE
     if not emb_onnx.is_file():
-        download_fn(f"{_EMB_BASE}/{EMBEDDING_MODEL_FILE}", emb_onnx)
+        download_fn(f"{_DIAR_BASE}/{EMBEDDING_MODEL_FILE}", emb_onnx)
 
     return seg_onnx, emb_onnx
 

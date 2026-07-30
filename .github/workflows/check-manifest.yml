@@ -1,0 +1,23 @@
+name: Check manifest coverage
+
+on:
+  push:
+    paths:
+      - "yapsnap/**"
+      - "scripts/**"
+      - "pyproject.toml"
+  pull_request:
+    paths:
+      - "yapsnap/**"
+      - "scripts/**"
+      - "pyproject.toml"
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_manifest_coverage.py
