@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yapsnap"
-version = "0.1.4.1"
-description = "Snap any video URL or local audio/video into a plaintext transcript. CPU-first, offline, single command."
+version = "0.2.0"
+description = "Snap any video URL or local audio/video into a plaintext transcript. Auto-detects the spoken language. CPU-first, offline, single command."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 authors = [{ name = "yapsnap" }]
-keywords = ["asr", "transcription", "diarization", "speaker-diarization", "sherpa-onnx", "kroko", "yt-dlp", "youtube", "tiktok", "instagram", "transcribe"]
+keywords = ["asr", "transcription", "diarization", "speaker-diarization", "language-identification", "sherpa-onnx", "kroko", "whisper", "yt-dlp", "youtube", "tiktok", "instagram", "transcribe"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -25,7 +25,12 @@ dependencies = [
     # wheels. If sherpa-onnx is later confirmed built against the NumPy 2.x
     # ABI, raise this cap and regenerate the lock file.
     "numpy>=1.26,<2",
-    "yt-dlp>=2026.3.17",
+    # yt-dlp is deliberately UNPINNED (no upper bound, no lock entry). Sites
+    # change their extractors constantly and any given release goes stale
+    # within weeks, so pinning it is what breaks downloads, not what prevents
+    # breakage. Always resolve to the newest release; `pip install -U yt-dlp`
+    # is the standard fix for a failing URL.
+    "yt-dlp",
 ]
 
 [project.urls]

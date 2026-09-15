@@ -3,11 +3,13 @@
 yapsnap — snap any video or audio into plaintext.
 
 Transcribes a local audio/video file or a URL (YouTube, X, TikTok, Instagram,
-or any direct mp3/mp4 URL) using the sherpa-onnx streaming Kroko English
-transducer. Runs entirely on CPU.
+or any direct mp3/mp4 URL) using a sherpa-onnx streaming Kroko transducer.
+The spoken language is detected automatically by default (--lang auto) and the
+matching Kroko model is fetched. Runs entirely on CPU.
 
 Usage:
-    yapsnap INPUT [-o OUTPUT.txt] [--timestamps] [--speed 1.4] [--keep-audio] [--model DIR]
+    yapsnap INPUT [-o OUTPUT.txt] [--timestamps] [--speed 1.4] [--keep-audio]
+                  [--lang auto|CODE] [--model DIR]
 
 INPUT may be:
     - a local file (.mp3, .mp4, .m4a, .wav, .webm, ...)
@@ -35,10 +37,13 @@ import numpy as np
 SAMPLE_RATE = 16000
 FEATURE_DIM = 80
 
-# Auto-download source for the default Kroko English streaming model.
+# Auto-download source for the fallback Kroko English streaming model. Used
+# when language auto-detection is unavailable, inconclusive, or lands on a
+# language yapsnap has no model for.
 # The repo ships plain .onnx (no .int8 variants); find_model_file still prefers
 # int8 if a custom --model dir provides them.
 DEFAULT_MODEL_REPO = "kouhxp/sherpa-onnx-streaming-zipformer-en-kroko"
+FALLBACK_LANG = "en"
 DEFAULT_MODEL_FILES = ("encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt")
 HF_BASE = "https://huggingface.co"
 HTTP_UA = "yapsnap/0.1 (+https://github.com/)"
@@ -372,8 +377,70 @@ def ensure_default_model() -> Path:
     return ensure_model(DEFAULT_MODEL_REPO)
 
 
-def resolve_model_dir(model_arg: Optional[Path], lang: Optional[str] = None) -> Path:
-    """Resolve the model directory from CLI arg, env var, --lang, or auto-download."""
+def ensure_lid_model() -> tuple[Path, Path]:
+    """Download the whisper-tiny LID head into the user cache if missing.
+
+    Returns (encoder_path, decoder_path)."""
+    from . import lid
+
+    cache = user_cache_dir() / lid.LID_REPO.replace("/", "__")
+    return lid.ensure_lid_model(cache, _download)
+
+
+def detect_language(media_path: Path) -> Optional[str]:
+    """Identify the spoken language of a media file, or None if undetermined.
+
+    Probes two short windows decoded at ORIGINAL speed (speed=1.0 —
+    time-stretched audio shifts the spectrum and confuses the LID head) and
+    returns a code from LANG_MODELS. Returns None — never raises — when
+    detection fails or is inconclusive: no usable audio, a download or model
+    error, or a language yapsnap has no Kroko model for. Callers fall back to
+    FALLBACK_LANG.
+    """
+    from . import lid
+
+    try:
+        windows = probe_windows(media_path)
+        if not windows:
+            print("language auto-detect: no usable audio in the probe windows; "
+                  f"falling back to {FALLBACK_LANG}", file=sys.stderr)
+            return None
+        encoder, decoder = ensure_lid_model()
+        code = lid.detect_language(
+            windows, encoder, decoder, num_threads=_thread_budget()
+        )
+    except Exception as e:
+        print(f"language auto-detect unavailable ({e}); "
+              f"falling back to {FALLBACK_LANG}", file=sys.stderr)
+        return None
+
+    if code is None:
+        print(f"language auto-detect: inconclusive; falling back to "
+              f"{FALLBACK_LANG}", file=sys.stderr)
+        return None
+    if code not in LANG_MODELS:
+        # Only reachable with a non-pruned whisper export via
+        # YAPSNAP_LID_MODEL_DIR; the shipped model knows only LANG_MODELS.
+        print(f"language auto-detect: detected '{code}', which has no Kroko "
+              f"model in yapsnap; falling back to {FALLBACK_LANG}. Pass "
+              f"--model DIR to use your own model for this language.",
+              file=sys.stderr)
+        return None
+
+    print(f"language auto-detect: {LANG_NAMES.get(code, code)} ({code})",
+          file=sys.stderr)
+    return code
+
+
+def resolve_model_dir(model_arg: Optional[Path], lang: Optional[str] = None,
+                      media_path: Optional[Path] = None) -> Path:
+    """Resolve the model directory from CLI arg, env var, --lang, or auto-download.
+
+    `lang` may be a code from LANG_MODELS, ``"auto"``/None for detection, or
+    ``None`` with no `media_path` (which behaves as English). Detection needs
+    `media_path`, so callers that pass ``lang="auto"`` must resolve the input to
+    a local file first.
+    """
     # Explicit --model takes priority
     candidate = model_arg or (
         Path(os.environ["KROKO_MODEL"]) if os.environ.get("KROKO_MODEL") else None
@@ -385,18 +452,20 @@ def resolve_model_dir(model_arg: Optional[Path], lang: Optional[str] = None) -> 
             raise FileNotFoundError(f"tokens.txt not found in {candidate}")
         return candidate
 
-    # --lang selects a language-specific model
-    if lang is not None:
-        lang = lang.lower()
-        if lang not in LANG_MODELS:
-            available = ", ".join(sorted(LANG_MODELS.keys()))
-            raise ValueError(
-                f"unsupported language '{lang}'. Available: {available}"
-            )
-        return ensure_model(LANG_MODELS[lang])
+    lang = lang.lower() if lang else None
 
-    # Default: English
-    return ensure_default_model()
+    # Auto: detect from the audio, falling back to English.
+    if lang in (None, "auto"):
+        detected = detect_language(media_path) if media_path is not None else None
+        return ensure_model(LANG_MODELS[detected or FALLBACK_LANG])
+
+    # An explicit --lang selects a language-specific model.
+    if lang not in LANG_MODELS:
+        available = ", ".join(sorted(LANG_MODELS.keys()))
+        raise ValueError(
+            f"unsupported language '{lang}'. Available: auto, {available}"
+        )
+    return ensure_model(LANG_MODELS[lang])
 
 
 # ---------------------------------------------------------------------------
@@ -471,9 +540,17 @@ def _has_audio_stream(media_path: Path) -> bool:
     return "audio" in proc.stdout.lower()
 
 
-def decode_to_pcm(media_path: Path, speed: float = 1.0) -> np.ndarray:
+def decode_to_pcm(media_path: Path, speed: float = 1.0,
+                  start_seconds: float = 0.0,
+                  max_seconds: Optional[float] = None) -> np.ndarray:
     """Decode any audio/video file ffmpeg understands to 16kHz mono float32.
+
     `speed` applies atempo (pitch-preserving). atempo accepts 0.5..2.0 per stage.
+    `start_seconds` / `max_seconds` decode only a slice of the input, which is
+    how the language-ID probe avoids a full pass over long files. `start_seconds`
+    seeks in original-audio time; `max_seconds` caps the *decoded* duration, so
+    at speed != 1.0 it covers `speed x max_seconds` of source audio. The probe
+    uses speed=1.0, where the two coincide.
     """
     _require_tool("ffmpeg")
 
@@ -484,7 +561,13 @@ def decode_to_pcm(media_path: Path, speed: float = 1.0) -> np.ndarray:
             f"available; updating yt-dlp (pip install -U yt-dlp) usually fixes it."
         )
 
-    cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(media_path)]
+    cmd = ["ffmpeg", "-nostdin", "-loglevel", "error"]
+    # -ss before -i seeks by keyframe (fast); -t after -i bounds the output.
+    if start_seconds > 0:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += ["-i", str(media_path)]
+    if max_seconds is not None:
+        cmd += ["-t", f"{max_seconds:.3f}"]
     if abs(speed - 1.0) > 1e-5:
         stages, remaining = [], float(speed)
         while remaining > 2.0:
@@ -510,6 +593,72 @@ def decode_to_pcm(media_path: Path, speed: float = 1.0) -> np.ndarray:
     if not proc.stdout:
         return np.array([], dtype=np.float32)
     return np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+# Language-ID probe. Windows quieter than this RMS are almost certainly silence
+# or room tone; identifying them wastes a pass and can only mislead.
+PROBE_MIN_RMS = 1e-3
+# Where to place the windows in a file of known duration, as fractions of it.
+# Early enough to skip a musical intro, late enough to be past the titles.
+PROBE_POSITIONS = (0.15, 0.55)
+# Fallbacks when the duration is unknown (no ffprobe, live stream, odd
+# container): fixed offsets in seconds.
+PROBE_FALLBACK_OFFSETS = (0.0, 30.0)
+
+
+def media_duration(media_path: Path) -> Optional[float]:
+    """Duration in seconds via ffprobe, or None when it can't be determined."""
+    if shutil.which("ffprobe") is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(media_path)],
+            capture_output=True, check=True, text=True,
+        )
+        value = float(proc.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def probe_offsets(duration: Optional[float]) -> list[float]:
+    """Start offsets (seconds) for the language-ID probe windows."""
+    win = lid_window_seconds()
+    if duration is None:
+        return [o for o in PROBE_FALLBACK_OFFSETS]
+    if duration <= win * len(PROBE_POSITIONS):
+        # Too short to sample twice without overlap — one window from the top.
+        return [0.0]
+    return [min(duration * pos, duration - win) for pos in PROBE_POSITIONS]
+
+
+def lid_window_seconds() -> float:
+    from . import lid
+    return lid.WINDOW_SECONDS
+
+
+def probe_windows(media_path: Path) -> list[np.ndarray]:
+    """Short PCM windows for language detection, decoded at original speed.
+
+    Two 5-second windows (see lid.WINDOW_SECONDS) taken from
+    different points in the file: whisper zero-pads anything shorter than 30s
+    internally, so this costs a fraction of a full pass, and sampling twice
+    keeps a musical intro or a stray English cold-open from deciding the
+    language on its own. Each window is a separate keyframe-seeked ffmpeg call,
+    so long files are never decoded end to end. Near-silent windows are dropped.
+    """
+    win = lid_window_seconds()
+    windows: list[np.ndarray] = []
+    for offset in probe_offsets(media_duration(media_path)):
+        pcm = decode_to_pcm(media_path, speed=1.0,
+                            start_seconds=offset, max_seconds=win)
+        if len(pcm) == 0:
+            continue
+        if float(np.sqrt(np.mean(pcm ** 2))) < PROBE_MIN_RMS:
+            continue
+        windows.append(pcm)
+    return windows
 
 
 # ---------------------------------------------------------------------------
@@ -1061,7 +1210,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="yapsnap",
         description="Snap a local audio/video file or any video URL into a "
-                    "plaintext transcript using sherpa-onnx (Kroko English streaming).",
+                    "plaintext transcript using sherpa-onnx (Kroko streaming "
+                    "transducers, language auto-detected by default).",
     )
     ap.add_argument("input", help="Local file path or URL (YouTube, X, TikTok, Instagram, mp4/mp3 URL).")
     ap.add_argument("-o", "--output", type=Path, default=None,
@@ -1076,14 +1226,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="Keep the downloaded/intermediate audio file instead of deleting it.")
     ap.add_argument("--model", type=Path, default=None,
                     help="Path to a sherpa-onnx streaming transducer model directory "
-                         "(or set KROKO_MODEL). Default: auto-download Kroko English.")
-    ap.add_argument("--lang", type=str, default=None,
-                    help="Language code for transcription model. "
-                    "Downloads the matching Kroko model automatically. "
-                    "Available: " + ", ".join(
+                         "(or set KROKO_MODEL). Overrides --lang. Default: "
+                         "auto-download the Kroko model for the detected language.")
+    ap.add_argument("--lang", type=str, default="auto", metavar="CODE",
+                    help="Language code for the transcription model, or 'auto' "
+                    "(default) to detect it from the audio with a whisper-tiny "
+                    "language-ID head. Downloads the matching Kroko model "
+                    "automatically. Available: " + ", ".join(
                         f"{k} ({v})" for k, v in sorted(LANG_NAMES.items())
-                    ) + ". Default: en (English). "
-                    "Ignored if --model is given.")
+                    ) + ". Detection falls back to en when it is unsure or the "
+                    "language has no Kroko model. Ignored if --model is given.")
     ap.add_argument("--diarize", action="store_true",
                     help="Label speakers ('who spoke when'). Output lines become "
                          "'SPEAKER_00 [MM:SS]: text'. Implies --timestamps. CPU-only, "
@@ -1116,12 +1268,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("error: --speed must be > 0", file=sys.stderr)
         return 2
 
-    # Resolve the model first so we fail fast if it can't be obtained.
-    try:
-        model_dir = resolve_model_dir(args.model, lang=args.lang)
-    except Exception as e:
-        print(f"model error: {e}", file=sys.stderr)
-        return 1
+    # Resolve the model up front so we fail fast if it can't be obtained —
+    # except under --lang auto, where detection needs the audio in hand. In
+    # that case model_dir stays None here and is resolved once the input has
+    # been fetched below.
+    lang_arg = (args.lang or "auto").strip().lower()
+    explicit_model = args.model is not None or bool(os.environ.get("KROKO_MODEL"))
+    model_dir: Optional[Path] = None
+    if explicit_model or lang_arg != "auto":
+        try:
+            model_dir = resolve_model_dir(args.model, lang=lang_arg)
+        except Exception as e:
+            print(f"model error: {e}", file=sys.stderr)
+            return 1
 
     # Resolve input -> a local media path.
     tmp_root: Optional[Path] = None
@@ -1141,6 +1300,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             media_path = Path(args.input)
             if not media_path.is_file():
                 print(f"error: file not found: {media_path}", file=sys.stderr)
+                return 1
+
+        # --lang auto: identify the language from the fetched audio, then get
+        # the matching ASR model.
+        if model_dir is None:
+            try:
+                model_dir = resolve_model_dir(None, lang="auto",
+                                              media_path=media_path)
+            except Exception as e:
+                print(f"model error: {e}", file=sys.stderr)
                 return 1
 
         try:

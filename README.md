@@ -14,11 +14,11 @@ That's it. You get a `.txt` next to your shell, transcribed on your CPU, in less
 
 ## Why yapsnap
 
-- ⚡ **Fast on CPU.** Streaming Zipformer transducer (Kroko English) chews through audio at several times realtime on a laptop. No CUDA. No M-series-only tricks. Plain old cores.
+- ⚡ **Fast on CPU.** Streaming Zipformer transducer (Kroko) chews through audio at several times realtime on a laptop. No CUDA. No M-series-only tricks. Plain old cores.
 - 🌐 **Any video URL, plus local files.** YouTube. X. TikTok. Instagram Reels. Direct `.mp4`/`.mp3` links. Or just point it at a file on disk. yt-dlp handles the fetch, ffmpeg handles the decode, the rest is yours.
-- 📴 **Offline after first run.** ~80 MB model downloads once to your cache and stays there. No API keys. No quotas. Your audio never leaves your machine.
-- 🪶 **Lean deps.** `sherpa-onnx`, `numpy`, `yt-dlp` — that's the whole runtime, diarization included. No PyTorch, no cloud SDKs.
-- 🗣 **Ten-plus languages.** English out of the box; French, German, Spanish, Italian, Portuguese, Dutch, Swedish, Swiss German, Hebrew, and Turkish are a one-flag `--lang` swap away. See [Other languages](#other-languages).
+- 📴 **Offline after first run.** Models download once to your cache (~80 MB per language, ~20 MB for the language detector) and stay there. No API keys. No quotas. Your audio never leaves your machine.
+- 🪶 **Lean deps.** `sherpa-onnx`, `numpy`, `yt-dlp` — that's the whole runtime, diarization and language detection included. No PyTorch, no cloud SDKs.
+- 🗣 **Ten languages, detected for you.** `--lang auto` is the default: a pruned whisper-tiny language-ID head hears two 5-second samples and pulls the matching Kroko model — a fraction of a second, same ONNX runtime, no extra deps. German, English, Spanish, French, Italian, Hebrew, Dutch, Portuguese, Swedish, Turkish. Pin one with `--lang fr` whenever you already know. See [Languages](#languages).
 - ⏱ **Sentence-level timestamps when you want them.** `--timestamps` adds `[MM:SS]` per sentence using Kroko's built-in punctuation. Timing stays correct even when you transcribe at 2x.
 - 🗣️ **Speaker labels, optional.** `--diarize` answers "who spoke when" and prefixes each line with `SPEAKER_00`, `SPEAKER_01`, … Still CPU-only, still ONNX — no PyTorch, no extra runtime deps. See [Diarization](#diarization).
 
@@ -35,11 +35,13 @@ pip install yapsnap
 yapsnap https://www.tiktok.com/@user/video/7234567890123456789
 yapsnap meeting.mp4 --timestamps
 yapsnap interview.mp3 --diarize          # label speakers
-yapsnap interview.mp3 --lang fr          # French audio? one flag
+yapsnap interview.mp3 --lang fr          # skip detection, force French
 yapsnap podcast.mp3 -o ~/notes/episode.txt
 ```
 
-The first run downloads the model (~80 MB). Every run after is offline.
+The language is detected automatically — you don't have to say what you're feeding it.
+
+The first run downloads the language-ID head (~20 MB) and the ASR model for whatever language it hears (~80 MB). Every run after is offline.
 
 ---
 
@@ -71,6 +73,8 @@ Plus any local file ffmpeg can decode: `.mp3`, `.mp4`, `.m4a`, `.wav`, `.webm`, 
 | Windows | `winget install ffmpeg` *or* `choco install ffmpeg`      |
 
 ### 2. yapsnap
+
+`yt-dlp` is installed as a dependency but is **not version-pinned** on purpose — sites change their extractors constantly, so the newest release is always the one you want. If a URL suddenly fails, `pip install -U yt-dlp` first.
 
 From PyPI (recommended):
 
@@ -108,7 +112,7 @@ yapsnap interview.mp3 --diarize
 # Speaker labels with a known speaker count (more reliable than auto-detect)
 yapsnap call.mp3 --diarize --num-speakers 2
 
-# Transcribe non-English audio (downloads matching model automatically)
+# Language is auto-detected; pin it to skip detection (or to override it)
 yapsnap interview.mp3 --lang fr
 yapsnap podcast.mp3 --lang de --timestamps
 
@@ -171,16 +175,17 @@ Speaker numbers are assigned in order of appearance and are stable within a sing
 | `--threads`       | ONNX threads per worker. Default `0` (autodetect). See [Performance](#performance). |
 | `--keep-audio`    | Keep the downloaded audio (URL inputs only).                         |
 | `--model`         | Override the model directory. Also reads `KROKO_MODEL` env var.      |
-| `--lang`          | Language code (e.g. `fr`, `de`). Auto-downloads the matching Kroko model. See [Other languages](#other-languages). Ignored if `--model` is given. |
+| `--lang`          | Language code (e.g. `fr`, `de`), or `auto` (default) to detect it from the audio. Auto-downloads the matching Kroko model. See [Languages](#languages). Ignored if `--model` is given. |
 
 ---
 
 ## How it works
 
 1. **Fetch.** If the input is a URL, `yt-dlp` grabs the best audio-only stream to a temp directory. If it's a local path, this step is skipped.
-2. **Decode.** `ffmpeg` pipes the media into 16 kHz mono PCM. The optional `atempo` filter speeds it up without raising pitch.
-3. **Recognize.** A streaming Zipformer2 transducer (Kroko English, INT8 ONNX, ~80 MB) eats the PCM in chunks. CPU-only. Greedy decode.
-4. **Format.** Plain text by default. With `--timestamps`, token timestamps are grouped on `.!?` into sentences and scaled back to original-audio time.
+2. **Identify.** Under the default `--lang auto`, two 5-second windows — cut at roughly 15% and 55% into the file, each its own keyframe-seeked `ffmpeg` call — are decoded at original speed and run through a whisper-tiny language-ID head pruned to yapsnap's ten languages (INT8 ONNX, ~20 MB), via sherpa-onnx's spoken-language-ID API. If the two windows agree, that's the language; if not, they're concatenated and identified once more as a tiebreak. Skipped entirely when `--lang CODE` or `--model` is given.
+3. **Decode.** `ffmpeg` pipes the media into 16 kHz mono PCM. The optional `atempo` filter speeds it up without raising pitch.
+4. **Recognize.** A streaming Zipformer2 transducer (Kroko, INT8 ONNX, ~80 MB) eats the PCM in chunks. CPU-only. Greedy decode.
+5. **Format.** Plain text by default. With `--timestamps`, token timestamps are grouped on `.!?` into sentences and scaled back to original-audio time.
 
 With `--diarize`, a second pass runs the audio (decoded at original speed) through a speaker-segmentation model and a speaker-embedding model, clusters the voiceprints into speakers, and tags each sentence with the speaker active at its start. All ONNX, all CPU.
 
@@ -207,7 +212,7 @@ Two knobs let you override the autotuning if you want to experiment:
 
 ## Model & cache
 
-The default Kroko English model is downloaded on first run to:
+Models are downloaded on first run to:
 
 - **macOS** — `~/Library/Caches/yapsnap/`
 - **Linux** — `$XDG_CACHE_HOME/yapsnap/` (or `~/.cache/yapsnap/`)
@@ -215,21 +220,23 @@ The default Kroko English model is downloaded on first run to:
 
 To use a different streaming transducer (other languages, larger Kroko variants, etc.), point `--model` at a directory containing `encoder(.int8).onnx`, `decoder(.int8).onnx`, `joiner(.int8).onnx`, and `tokens.txt`. Or set `KROKO_MODEL` in your environment.
 
-If you use `--diarize`, the segmentation and embedding models download to a `diarization-models/` subfolder of the same cache directory on first use, and are reused offline thereafter.
+The language-ID head lands in a `kouhxp__whisper-tiny-lid/` subfolder of the same cache; each ASR model gets its own `kouhxp__sherpa-onnx-streaming-zipformer-<lang>-kroko/` folder, so several languages can live side by side. If you use `--diarize`, the segmentation and embedding models download to `diarization-models/`. Everything is reused offline thereafter.
+
+Set `YAPSNAP_LID_MODEL_DIR` to a directory holding `lid-encoder.int8.onnx` and `lid-decoder.int8.onnx` to bypass the language-ID download entirely.
 
 ---
 
-## Other languages
+## Languages
 
-The default model is English, but yapsnap isn't limited to it. The easiest way to transcribe another language is `--lang`:
+yapsnap detects the spoken language by default (`--lang auto`) and downloads the matching Kroko model — nothing to pass:
 
 ```bash
-yapsnap interview.mp3 --lang fr          # French
-yapsnap podcast.mp3 --lang de            # German
-yapsnap meeting.mp4 --lang es --timestamps  # Spanish with timestamps
+yapsnap interview.mp3                     # figures out it's French, fetches the French model
 ```
 
-The first run for a given language downloads the matching Kroko model (~80 MB) to your cache; every run after is offline. Available language codes:
+Detection runs a [whisper-tiny language-ID head](https://huggingface.co/kouhxp/whisper-tiny-lid) (INT8 ONNX, ~20 MB, MIT) pruned to exactly these ten languages, through sherpa-onnx — no extra runtime dependency, same as diarization. It listens to **two 5-second windows** taken from different points in the file (never the whole recording), so it costs a fraction of a second and a couple of keyframe seeks even on a three-hour podcast. Near-silent windows are skipped; if the two windows disagree, they're identified together as a tiebreak.
+
+Available language codes:
 
 | Code | Language   | Code | Language   |
 |------|------------|------|------------|
@@ -239,7 +246,25 @@ The first run for a given language downloads the matching Kroko model (~80 MB) t
 | `fr` | French     | `sv` | Swedish    |
 | `it` | Italian    | `tr` | Turkish    |
 
+Pin a language to skip detection entirely — faster, and the right move when you already know or when the audio is code-switched:
+
+```bash
+yapsnap interview.mp3 --lang fr          # French
+yapsnap podcast.mp3 --lang de            # German
+yapsnap meeting.mp4 --lang es --timestamps  # Spanish with timestamps
+```
+
 `--lang` is ignored if `--model` is also given — an explicit model always wins.
+
+### When detection falls back
+
+yapsnap transcribes with **English** and prints a note on stderr when detection can't commit:
+
+- both probe windows are silent (or the file has no readable audio there),
+- the LID model can't be downloaded, or your `sherpa-onnx` is too old for its spoken-language-ID API,
+- the model returns a language with no Kroko model — only possible if you point `YAPSNAP_LID_MODEL_DIR` at a full whisper export rather than the pruned ten-language one.
+
+Detection never aborts a run. If a fallback is wrong for your file, `--lang CODE` settles it.
 
 ### Manual model setup
 
@@ -254,7 +279,7 @@ export KROKO_MODEL=/path/to/kroko-french
 yapsnap interview.mp3
 ```
 
-Kroko publishes streaming models for a growing list of languages on Hugging Face: <https://huggingface.co/Banafo/Kroko-ASR/tree/main>.
+Kroko publishes streaming models for a growing list of languages on Hugging Face: <https://huggingface.co/Banafo/Kroko-ASR/tree/main>. `--model` skips language detection too.
 
 Each model is single-language, so to work across several languages keep them in separate folders and switch with `--model` (or re-export `KROKO_MODEL`) as you go. Any other sherpa-onnx streaming transducer with the standard `encoder` / `decoder` / `joiner` / `tokens.txt` layout works too, not just the Kroko ones.
 
@@ -317,7 +342,8 @@ To skip auto-download entirely and use local diarization models, pass `--diarize
 
 ## Notes & limits
 
-- The default model is **English**. For other languages, download a matching model and pass it with `--model` — see [Other languages](#other-languages) for the current list and instructions.
+- **Language detection is a guess, not a guarantee.** It's a tiny model hearing ten seconds. Heavy accents, noisy audio, and code-switching all push it around, and a file whose first minute is in a different language than the rest will fool it. Pass `--lang CODE` when it matters.
+- Only one language per run — the ASR models are single-language, so a bilingual recording gets transcribed in whichever language wins.
 - `--speed` trades time-stretching for runtime: higher means less audio to decode and a shorter run (try `2.0` to go faster), lower means cleaner output on noisy, mumbled, or fast-speech sources (drop to `1.0`). The default `1.4` is a middle ground that reads well; the difference between nearby values like 1.4 and 1.5 is small, but across the full range (1.0 vs 2.0) it's noticeable.
 - Some social-media URLs are geo-locked or login-walled; `yt-dlp` will say so explicitly.
 - This is a streaming model, so timestamps come from token positions in the recognized stream. They're accurate enough for navigation, not for subtitling-grade alignment.
@@ -326,6 +352,6 @@ To skip auto-download entirely and use local diarization models, pass `--diarize
 
 ## License
 
-Apache-2.0 for this project. The Kroko model is distributed under its own license — see <https://huggingface.co/Banafo/Kroko-ASR>. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Apache-2.0 for this project. The Kroko model is distributed under its own license — see <https://huggingface.co/Banafo/Kroko-ASR>. The language-ID head is derived from OpenAI's whisper-tiny and is MIT licensed. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 The optional diarization models carry their own licenses, separate from yapsnap's: the default **pyannote** segmentation model is CC-BY-4.0 (attribution), the speaker-embedding model is Apache-2.0, and the opt-in **reverb** segmentation model (`--diarize-model reverb`) is **non-commercial**. If you use diarization, review the license of the model you select before relying on it.

@@ -1,3 +1,14 @@
+# yapsnap hash-pinned dependency lock — regenerate with scripts/gen_hashes.sh --lock
+#
+# Install with:  pip install --require-hashes -r requirements-lock.txt
+#
+# Deliberately NOT in this file:
+#
+#   yt-dlp     — always install/upgrade the newest release separately
+#                (`pip install -U yt-dlp`). Site extractors break constantly;
+#                a pinned yt-dlp is a broken yt-dlp within weeks. gen_hashes.sh
+#                strips it from the generated lock.
+
 --only-binary :all:
 
 numpy==1.26.4 \
@@ -106,6 +117,3 @@ sherpa-onnx-core==1.13.2 \
     --hash=sha256:c51a3ecee1c44e7fb059d78058025b3b9f3c5654bee638d7089ef781ef37f9ac \
     --hash=sha256:f5adb0d892b14704a51922d6550970f470054ddf56be08a7f20176c480ae2e11
     # via sherpa-onnx
-yt-dlp==2026.3.17 \
-    --hash=sha256:32992db94303a8a5d211a183f2174834fe7f8c29d83ed2e7a324eae97a8f26d8
-    # via yapsnap (pyproject.toml)

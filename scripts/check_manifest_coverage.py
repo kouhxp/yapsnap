@@ -4,8 +4,8 @@ CI check: verify that every filename yapsnap can auto-download is listed in
 model_checksums.sha256.
 
 Exits 0 if all files are covered, 1 if any are missing. Intended to run in CI
-so that a new model added to diarize.py or __init__.py without a manifest
-entry is caught before release.
+so that a new model added to diarize.py, lid.py or __init__.py without a
+manifest entry is caught before release.
 
 Zero runtime dependencies — parses the source files directly instead of
 importing yapsnap (which pulls in numpy, sherpa-onnx, etc.).
@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "yapsnap" / "model_checksums.sha256"
 INIT_PY = REPO_ROOT / "yapsnap" / "__init__.py"
 DIARIZE_PY = REPO_ROOT / "yapsnap" / "diarize.py"
+LID_PY = REPO_ROOT / "yapsnap" / "lid.py"
 
 
 def parse_manifest() -> dict[str, str]:
@@ -55,6 +56,17 @@ def extract_dict_from_source(path: Path, var_name: str) -> dict:
 
 def extract_tuple_from_source(path: Path, var_name: str) -> tuple:
     """Extract a top-level tuple assignment from a Python source file via AST."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == var_name:
+                    return ast.literal_eval(node.value)
+    raise ValueError(f"{var_name} not found in {path}")
+
+
+def extract_str_from_source(path: Path, var_name: str) -> str:
+    """Extract a top-level string assignment from a Python source file via AST."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign):
@@ -96,6 +108,14 @@ def main() -> int:
     seg_models = extract_dict_from_source(DIARIZE_PY, "SEGMENTATION_MODELS")
     emb_default = extract_embedding_default(DIARIZE_PY)
 
+    # From lid.py (--lang auto). LID_FILES is a tuple of name references, so
+    # read the two filename constants directly.
+    lid_repo = extract_str_from_source(LID_PY, "LID_REPO")
+    lid_files = [
+        extract_str_from_source(LID_PY, "LID_ENCODER_FILE"),
+        extract_str_from_source(LID_PY, "LID_DECODER_FILE"),
+    ]
+
     missing: list[str] = []
 
     # 1) ASR language models
@@ -114,6 +134,12 @@ def main() -> int:
     if emb_default not in checksums:
         missing.append(f"  {emb_default}  (diarize embedding, default)")
 
+    # 4) Language-ID model files
+    for fname in lid_files:
+        key = f"{lid_repo}/{fname}"
+        if key not in checksums:
+            missing.append(f"  {key}  (language auto-detect)")
+
     if missing:
         print(
             "FAIL: the following downloadable files are missing from "
@@ -126,7 +152,8 @@ def main() -> int:
         )
         return 1
 
-    n_checked = len(lang_models) * len(model_files) + len(seg_models) + 1
+    n_checked = (len(lang_models) * len(model_files) + len(seg_models) + 1
+                 + len(lid_files))
     print(f"OK: all {n_checked} downloadable filenames found in manifest.")
     return 0
 

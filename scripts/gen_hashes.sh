@@ -10,6 +10,7 @@
 # The model manifest covers every file yapsnap may auto-download:
 #   - The 4 ASR model files (encoder.onnx, decoder.onnx, joiner.onnx,
 #     tokens.txt) for each language repo in LANG_MODELS.
+#   - The whisper-tiny LID encoder/decoder used by --lang auto.
 #   - Diarization model files listed in DIARIZATION_FILES below.
 #
 # The script downloads each file to a temp directory, hashes it, and
@@ -39,6 +40,15 @@ LANG_REPOS=(
     "kouhxp/sherpa-onnx-streaming-zipformer-pt-kroko"
     "kouhxp/sherpa-onnx-streaming-zipformer-sv-kroko"
     "kouhxp/sherpa-onnx-streaming-zipformer-tr-kroko"
+)
+
+# Language-ID model for --lang auto — must match LID_REPO / LID_ENCODER_FILE /
+# LID_DECODER_FILE in yapsnap/lid.py. Keyed by repo/filename like the ASR
+# models.
+LID_REPO="kouhxp/whisper-tiny-lid"
+LID_FILES=(
+    tiny-encoder.int8.onnx
+    tiny-decoder.int8.onnx
 )
 
 # Diarization models — must stay in sync with SEGMENTATION_MODELS and the
@@ -148,6 +158,30 @@ EOF
         echo ""
     done
 
+    # Language-ID model (repo-qualified entries, same as the ASR models).
+    echo "--- $LID_REPO ---"
+    lid_dir="$CACHE/${LID_REPO//\//__}"
+    mkdir -p "$lid_dir"
+
+    for fname in "${LID_FILES[@]}"; do
+        dest="$lid_dir/$fname"
+        url="$HF_BASE/$LID_REPO/resolve/main/$fname"
+
+        if [[ -f "$dest" ]]; then
+            echo "  [cached] $fname"
+        else
+            echo "  [fetch]  $fname"
+            curl -fSL --retry 3 --retry-delay 5 \
+                 -H "User-Agent: yapsnap/gen_hashes" \
+                 -o "$dest.part" "$url"
+            mv "$dest.part" "$dest"
+        fi
+
+        digest=$($SHA_CMD "$dest" | awk '{print $1}')
+        echo "$digest  $LID_REPO/$fname" >> "$MANIFEST"
+    done
+    echo ""
+
     # Diarization models (bare-filename entries, from GitHub release assets).
     if (( ${#DIARIZATION_FILES[@]} > 0 )); then
         echo "--- diarization models ---"
@@ -194,6 +228,30 @@ if $do_lock; then
         pip-compile --generate-hashes \
             --output-file "$LOCKFILE" \
             "$REPO_ROOT/pyproject.toml"
+
+        # yt-dlp is deliberately unpinned: site extractors break constantly and
+        # a pinned yt-dlp goes stale within weeks, so users must always get the
+        # newest release. pip-compile has no way to exclude it, so drop its
+        # block (the "yt-dlp==" line plus its continuation and comment lines)
+        # from the generated lock.
+        python3 - "$LOCKFILE" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    lines = f.readlines()
+out, skipping = [], False
+for line in lines:
+    if re.match(r"^yt-dlp[=<>!\s]", line):
+        skipping = True          # start of the yt-dlp block
+    elif skipping and not line[:1].isspace():
+        skipping = False         # first unindented line ends it
+    if not skipping:
+        out.append(line)
+with open(path, "w") as f:
+    f.writelines(out)
+print("    dropped yt-dlp from the lock (intentionally unpinned)")
+PYEOF
+
         echo "==> Wrote $LOCKFILE"
     else
         echo "  pip-compile not found; install pip-tools and rerun, or regenerate manually:"
